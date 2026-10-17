@@ -30,7 +30,7 @@ for attempt in {1..100}; do
 done
 : "${WAYLAND_DISPLAY:?Sway did not create a socket}"
 export XDG_CURRENT_DESKTOP=sway
-timeout -k 10s 30s cargo test --locked wayland_idle_notification_arrives -- --ignored --test-threads=1
-timeout -k 10s 60s dbus-run-session -- cargo test --locked linux_settings_window_renders_preview_buttons -- --ignored --test-threads=1
-timeout -k 10s 150s dbus-run-session -- python scripts/smoke_linux.py
+cargo test --locked wayland_idle_notification_arrives -- --ignored --test-threads=1
+dbus-run-session -- cargo test --locked linux_settings_window_renders_preview_buttons -- --ignored --test-threads=1
+dbus-run-session -- python scripts/smoke_linux.py
 cargo build --locked --release

@@ -290,3 +290,6 @@ Or build by hand: `sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator xd
 **Launch at login** writes `~/.config/autostart/craftpulse.desktop`. Hyprland, Sway and niri do not read it unless you use `uwsm` or `dex`; add `exec-once = craftpulse` (Hyprland), `exec craftpulse` (Sway) or `spawn-at-startup "craftpulse"` (niri) instead.
 
 **Discord** must be running as the desktop app. The Flatpak and Snap builds are found automatically.
+
+See [Linux compatibility and verified test results](LINUX-TESTING.md) for Arch
+build instructions, desktop requirements, screenshots and executable downloads.

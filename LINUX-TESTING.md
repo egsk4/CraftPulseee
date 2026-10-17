@@ -65,9 +65,13 @@ Linux, Windows and macOS. CI results must be checked separately from local resul
   blocked by this cloud environment's mirror network restriction. A container
   shares its host kernel and does not reproduce another machine's exact desktop.
 
-- Arch CI has passed all 184 regression tests, strict Clippy and a debug build.
-  Its initial GUI run was blocked by Sway file capabilities in Docker; the CI
-  setup removes that unneeded privilege for headless tests.
+- Full rolling Arch CI passed on commit `c2bffd3`: 184 regression tests,
+  strict Clippy, debug build, Wayland idle notification, native WebKit settings
+  rendering, simulated AppImage/Discord end-to-end smoke, and optimized build.
+  The real-app integration test remains separate and passed on the host.
+  [Successful Arch run and executable](https://github.com/egsk4/CraftPulseee/actions/runs/39026769086).
+  Removing Sway's unneeded realtime capability fixed container execution; no
+  relaxation of Docker policy or WebKit sandbox disabling was needed.
 
 These checks do not establish compatibility with every desktop or ArtCraft
 release. Check the workflow run for actual Arch build results.
