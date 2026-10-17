@@ -1356,6 +1356,22 @@ mod tests {
         assert_eq!(state.dialog_activity().as_deref(), Some("Using Camera Raw"));
     }
 
+    /// Start real PhotoCraft with control port 7878 and the token file supplied here.
+    #[test]
+    #[ignore = "requires a running real PhotoCraft control server"]
+    fn real_photocraft_control_roundtrip() {
+        let token = std::env::var_os("CRAFTPULSE_TEST_PHOTOCRAFT_TOKEN_FILE")
+            .expect("set CRAFTPULSE_TEST_PHOTOCRAFT_TOKEN_FILE");
+        let mut client = ControlClient::new("PhotoCraft", 7878, PathBuf::from(token));
+        let (connection, _) = client.connect().expect("authenticate with real PhotoCraft");
+        client.connection = Some(connection);
+        let state = client.read_state().expect("read real ui.inspect response");
+        assert!(
+            state.tool.is_some(),
+            "PhotoCraft should report its selected tool"
+        );
+    }
+
     #[test]
     fn access_modes_match_the_apps() {
         assert_eq!(access_for("PhotoCraft"), Access::TokenFile);

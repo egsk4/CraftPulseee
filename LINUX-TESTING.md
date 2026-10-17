@@ -41,18 +41,23 @@ Linux, Windows and macOS. CI results must be checked separately from local resul
 
 ## Local evidence (2026-10-17)
 
-- Debian 13 host, kernel 6.18.44: 184 tests passed, 2 display tests ignored by default.
+- GitHub CI passed tests, strict Clippy and release builds for Linux x86-64,
+  Windows x86-64 and macOS ARM64 on commit `514c2a3`.
+- Debian 13 host, kernel 6.18.44: 184 tests passed; display and real-app tests run separately.
 - Both display tests then passed separately under headless Sway: Wayland idle
   notification and native WebKit settings page, including preview buttons.
-- Strict Clippy and debug build passed.
+- Strict Clippy, debug build, optimized release build, and the real PhotoCraft
+  smoke check against the release executable passed.
 - Native settings-window and simulated AppImage smoke checks also passed under
   Xvfb/X11. The X11 smoke checks idle configuration, not elapsed idle detection.
 - End-to-end smoke passed with both a simulated AppImage payload and real
   PhotoCraft 0.9.0: editing/idle presence, buttons over mock Discord IPC, API
   authentication, settings persistence, and partial session-setup failure.
   The real app was launched directly from extracted AppImage contents, not
-  installed through the launcher. Its detailed control API was not exercised.
-- Official launcher 0.3.2 x86-64 AppImage: published SHA256 matched and its real
+  installed through the launcher. A separate real control-client integration
+  test authenticated and read the selected Brush tool from `ui.inspect`.
+- Official launchers 0.3.2 and latest 0.4.1 x86-64 AppImages: published SHA256
+  values matched, and the real launcher
   window opened under Sway using extracted AppImage contents (no FUSE available).
 - Rolling Arch container `20261011.0.609700` starts, but package installation is
   blocked by this cloud environment's mirror network restriction. A container
@@ -68,3 +73,8 @@ because the test host has no GPU. [Captured CraftPulse diagnostics](docs/testing
 show the detected app and presence. To repeat the smoke check against an already
 running real PhotoCraft, set `CRAFTPULSE_USE_RUNNING_PHOTOCRAFT=1`; otherwise it
 creates a simulated AppImage process. Both modes use a mock Discord peer.
+
+To repeat the real control-client test, start PhotoCraft with control port 7878
+and a private token file, then run
+`CRAFTPULSE_TEST_PHOTOCRAFT_TOKEN_FILE=/path/to/token cargo test real_photocraft_control_roundtrip -- --ignored --test-threads=1`.
+This read-only check needs no Discord connection.

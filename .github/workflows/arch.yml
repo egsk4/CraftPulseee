@@ -27,7 +27,7 @@ jobs:
           if [[ "$result" != 0 ]]; then
             python - <<'DIAGNOSTICS'
           from pathlib import Path
-          message = Path('arch-test.log').read_text()[-12000:]
+          message = Path('arch-test.log').read_text()[-2000:]
           message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
           print('::error title=Arch check output::' + message)
           DIAGNOSTICS
