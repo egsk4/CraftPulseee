@@ -1,0 +1,36 @@
+# Maintainer: egsk4
+pkgname=craftpulse-git
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='Discord Rich Presence for the ArtCraft creative apps'
+arch=('x86_64' 'aarch64')
+url='https://github.com/egsk4/CraftPulse'
+license=('MIT')
+depends=('gtk3' 'webkit2gtk-4.1' 'libayatana-appindicator' 'xdotool')
+makedepends=('cargo' 'git')
+optdepends=('xorg-xprop: window titles on X11 and XWayland'
+            'xprintidle: idle detection on X11'
+            'kdotool: window titles on KDE Plasma (Wayland)')
+provides=('craftpulse')
+conflicts=('craftpulse')
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd CraftPulse
+  grep -m1 '^version' Cargo.toml | cut -d'"' -f2
+}
+
+build() {
+  cd CraftPulse
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --release --locked
+}
+
+package() {
+  cd CraftPulse
+  install -Dm755 target/release/craftpulse "$pkgdir/usr/bin/craftpulse"
+  install -Dm644 packaging/arch/craftpulse.desktop "$pkgdir/usr/share/applications/craftpulse.desktop"
+  install -Dm644 packaging/arch/craftpulse.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/craftpulse.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
