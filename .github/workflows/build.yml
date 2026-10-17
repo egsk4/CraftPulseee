@@ -1,6 +1,9 @@
 name: Build CraftPulse
 
-on: [push, pull_request]
+on:
+  push:
+    branches-ignore: [codex/arch-test-report]
+  pull_request:
 
 jobs:
   build:
