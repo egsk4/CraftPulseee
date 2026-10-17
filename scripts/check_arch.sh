@@ -14,7 +14,13 @@ seat seat0 fallback true
 CONFIG
 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$XDG_RUNTIME_DIR/sway.conf" > "$XDG_RUNTIME_DIR/sway.log" 2>&1 &
 sway_pid=$!
-trap 'kill "$sway_pid" 2>/dev/null || true; rm -rf "$XDG_RUNTIME_DIR"' EXIT
+cleanup() {
+  status=$?
+  if (( status != 0 )); then cat "$XDG_RUNTIME_DIR/sway.log"; fi
+  kill "$sway_pid" 2>/dev/null || true
+  rm -rf "$XDG_RUNTIME_DIR"
+}
+trap cleanup EXIT
 for attempt in {1..100}; do
   for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
     if [[ -S "$socket" ]]; then export WAYLAND_DISPLAY="$socket"; break 2; fi
