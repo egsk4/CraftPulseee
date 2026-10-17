@@ -55,20 +55,6 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
         if !status.success() {
             return Err("Unable to update Windows startup setting".to_string());
         }
-        if enabled {
-            // If the entry was ever switched off in Task Manager > Startup apps,
-            // Windows ignores the Run key until this flag is cleared.
-            let mut clear = Command::new("reg.exe");
-            clear.creation_flags(0x0800_0000);
-            clear.args([
-                "delete",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
-                "/v",
-                "CraftPulse",
-                "/f",
-            ]);
-            let _ = clear.status();
-        }
     }
     #[cfg(target_os = "macos")]
     {

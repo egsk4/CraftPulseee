@@ -117,7 +117,8 @@ fn main() {
     let mut last_stats_save = Instant::now();
     // Elapsed-timer starting points (unix seconds), per app session and per document.
     let mut session_timer: Option<((String, u32), i64)> = None;
-    let mut document_timer: Option<((String, u32, Option<String>), i64)> = None;
+    type DocumentTimer = ((String, u32, Option<String>), i64);
+    let mut document_timer: Option<DocumentTimer> = None;
     // Apps already reminded about this session (one toast each).
     let mut toasted: Vec<String> = Vec::new();
 
@@ -235,7 +236,12 @@ fn main() {
                 .and_then(|h| h.action.clone())
                 .or_else(|| app_config.action.clone())
                 .or(busy)
+                .or_else(|| live.as_ref().and_then(|state| state.dialog_activity()))
                 .or_else(|| idle.then(|| "Idle".to_string()))
+                .or_else(|| {
+                    live.as_ref()
+                        .and_then(|state| state.rule_activity(&app.name, &current_config.rules))
+                })
                 .or(live_activity)
                 .or_else(|| auto_activity.clone())
                 .unwrap_or_else(|| default_activity(&app.name, &current_config.action));

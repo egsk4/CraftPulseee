@@ -1,6 +1,6 @@
 use crate::config::ActivityRule;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System};
 
@@ -11,13 +11,17 @@ pub struct DetectedApp {
     pub document: Option<String>,
 }
 
-/// Seconds without input as last measured (`u64::MAX`: this system can't tell).
-/// Shown in the settings diagnostics, so "Idle never appears" can be traced.
+/// Largest idle timeout accepted by the settings API (one day).
 pub static LAST_IDLE_SECONDS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(u64::MAX);
 
+fn is_idle(seconds: Option<u64>, threshold: u64) -> bool {
+    threshold > 0 && seconds.is_some_and(|seconds| seconds >= threshold)
+}
+
 /// (normalized name, app name, process id, start time)
 type Candidate<'a> = (String, &'a str, u32, u64);
+type UiTabs = (Vec<(String, Option<bool>)>, String, Option<String>);
 
 #[derive(Default)]
 pub struct ProcessDetector {
@@ -26,10 +30,9 @@ pub struct ProcessDetector {
     current_pid: Option<u32>,
     /// Activity inferred from the app's open dialogs, e.g. "Exporting".
     pub activity: Option<String>,
-    /// Seconds without input that count as idle (0 = never idle). Set from the config.
-    pub idle_after_secs: u64,
     /// True when there has been no keyboard or mouse input for a while.
     pub idle: bool,
+    pub idle_after_secs: u64,
     /// A streaming or recording app (OBS and similar) is running.
     pub streaming: bool,
     /// Raw visible window titles of the chosen app (for the activity log).
@@ -43,6 +46,21 @@ pub struct ProcessDetector {
     extra_rules: Vec<ActivityRule>,
     /// Running processes that look like ArtCraft apps but aren't recognised.
     pub unknown: Vec<String>,
+}
+
+// Keep one logical app while retaining the window-owning helper processes.
+fn process_root(
+    mut pid: u32,
+    names: &HashMap<u32, String>,
+    parents: &HashMap<u32, Option<u32>>,
+) -> u32 {
+    for _ in 0..names.len() {
+        match parents.get(&pid).copied().flatten() {
+            Some(parent) if names.get(&parent) == names.get(&pid) => pid = parent,
+            _ => break,
+        }
+    }
+    pid
 }
 
 impl ProcessDetector {
@@ -93,13 +111,15 @@ impl ProcessDetector {
             .iter()
             .map(|(name, _, pid, _)| (*pid, name.clone()))
             .collect();
-        active.retain(|(name, _, pid, _)| {
-            !parents
-                .get(pid)
-                .copied()
-                .flatten()
-                .is_some_and(|parent| names_by_pid.get(&parent) == Some(name))
-        });
+        let roots: HashMap<u32, u32> = active
+            .iter()
+            .map(|(_, _, pid, _)| (*pid, process_root(*pid, &names_by_pid, &parents)))
+            .collect();
+        let mut families: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (&pid, &root) in &roots {
+            families.entry(root).or_default().push(pid);
+        }
+        active.retain(|(_, _, pid, _)| roots.get(pid) == Some(pid));
         let current = active
             .iter()
             .map(|(name, _, pid, start)| (name.clone(), *pid, *start))
@@ -107,8 +127,10 @@ impl ProcessDetector {
 
         // Prefer the ArtCraft app whose window you are actually using.
         let foreground = foreground_process_id();
-        let focused =
-            foreground.and_then(|fpid| active.iter().find(|(_, _, pid, _)| *pid == fpid).cloned());
+        let focused = foreground.and_then(|fpid| {
+            let root = roots.get(&fpid).copied().unwrap_or(fpid);
+            active.iter().find(|(_, _, pid, _)| *pid == root).cloned()
+        });
         let chosen = if focused.is_some() {
             focused
         } else if cfg!(any(target_os = "windows", target_os = "linux")) {
@@ -130,20 +152,38 @@ impl ProcessDetector {
             idle_for.unwrap_or(u64::MAX),
             std::sync::atomic::Ordering::Relaxed,
         );
-        self.idle = self.idle_after_secs > 0
-            && idle_for.is_some_and(|seconds| seconds >= self.idle_after_secs);
+        self.idle = is_idle(idle_for, self.idle_after_secs);
 
         match chosen {
             Some((_, name, process_id, _)) => {
                 self.current_pid = Some(process_id);
-                let (title_document, activity, mut titles) = window_info(process_id, name);
+                let mut family = families
+                    .remove(&process_id)
+                    .unwrap_or_else(|| vec![process_id]);
+                family.sort_unstable();
+                if let Some(fpid) = foreground.filter(|pid| family.contains(pid)) {
+                    family.retain(|pid| *pid != fpid);
+                    family.insert(0, fpid);
+                }
+                let ui_pid = foreground
+                    .filter(|pid| family.contains(pid))
+                    .unwrap_or(process_id);
+                let mut title_document = None;
+                let mut activity = None;
+                let mut titles = Vec::new();
+                for pid in family {
+                    let (document, action, window_titles) = window_info(pid, name);
+                    title_document = title_document.or(document);
+                    activity = activity.or(action);
+                    titles.extend(window_titles);
+                }
                 // Reading the accessibility tree is slow, so only do it every 2 seconds.
-                let uia_due = self.uia_pid != Some(process_id)
+                let uia_due = self.uia_pid != Some(ui_pid)
                     || self
                         .uia_checked
-                        .map_or(true, |at| at.elapsed() >= Duration::from_secs(2));
+                        .is_none_or(|at| at.elapsed() >= Duration::from_secs(2));
                 if uia_due {
-                    if self.uia_pid != Some(process_id) {
+                    if self.uia_pid != Some(ui_pid) {
                         self.uia_tabs.clear();
                         self.uia_doc = None;
                         self.uia_activity = None;
@@ -162,8 +202,7 @@ impl ProcessDetector {
                                 }),
                         )
                         .collect();
-                    let (tabs, note, ui_activity) =
-                        tab_candidates_via_uia(process_id, name, &rules);
+                    let (tabs, note, ui_activity) = tab_candidates_via_uia(ui_pid, name, &rules);
                     self.uia_activity = ui_activity;
                     let names: Vec<String> = tabs.iter().map(|(name, _)| name.clone()).collect();
                     let selected = tabs
@@ -197,7 +236,7 @@ impl ProcessDetector {
                     self.uia_tabs = names;
                     self.uia_doc = doc;
                     self.uia_checked = Some(Instant::now());
-                    self.uia_pid = Some(process_id);
+                    self.uia_pid = Some(ui_pid);
                 }
                 let document = self.uia_doc.clone().or(title_document);
                 if !self.uia_note.is_empty() {
@@ -399,11 +438,7 @@ fn element_selected(
 /// Set the environment variable CRAFTPULSE_DUMP_UIA=1 to also write the
 /// accessibility tree to `uia-<app>.txt` in the CraftPulse config folder.
 #[cfg(target_os = "windows")]
-fn tab_candidates_via_uia(
-    pid: u32,
-    app_name: &str,
-    rules: &[(String, String)],
-) -> (Vec<(String, Option<bool>)>, String, Option<String>) {
+fn tab_candidates_via_uia(pid: u32, app_name: &str, rules: &[(String, String)]) -> UiTabs {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use windows::Win32::{
@@ -535,7 +570,7 @@ fn tab_candidates_via_uia(
                         .iter()
                         .position(|(element, _)| lower.starts_with(element.as_str()))
                     {
-                        if ui_rule.map_or(true, |best| position < best)
+                        if ui_rule.is_none_or(|best| position < best)
                             && element_selected(&element) == Some(true)
                         {
                             ui_rule = Some(position);
@@ -621,11 +656,7 @@ fn tab_candidates_via_uia(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn tab_candidates_via_uia(
-    _pid: u32,
-    _app_name: &str,
-    _rules: &[(String, String)],
-) -> (Vec<(String, Option<bool>)>, String, Option<String>) {
+fn tab_candidates_via_uia(_pid: u32, _app_name: &str, _rules: &[(String, String)]) -> UiTabs {
     (Vec::new(), String::new(), None)
 }
 
@@ -661,8 +692,7 @@ fn idle_seconds() -> Option<u64> {
         dwTime: 0,
     };
     unsafe {
-        let _ = GetLastInputInfo(&mut info);
-        if info.dwTime == 0 {
+        if !GetLastInputInfo(&mut info).as_bool() {
             return None;
         }
         Some((GetTickCount().wrapping_sub(info.dwTime) / 1000) as u64)
@@ -826,6 +856,52 @@ pub fn strip_title(title: &str, app_name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn helper_windows_keep_the_same_logical_app() {
+        let names = [
+            (1, "photocraft".into()),
+            (2, "photocraft".into()),
+            (3, "lightcraft".into()),
+            (4, "photocraft".into()),
+        ]
+        .into();
+        let parents = [(1, None), (2, Some(1)), (3, Some(1)), (4, Some(2))].into();
+        assert_eq!(super::process_root(4, &names, &parents), 1);
+        assert_eq!(super::process_root(3, &names, &parents), 3);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_payload_is_recognised_from_its_environment() {
+        use std::{fs, process::Command};
+        let dir = std::env::temp_dir().join(format!("craftpulse-payload-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("payload");
+        fs::copy("/bin/sleep", &exe).unwrap();
+        let mut child = Command::new(&exe)
+            .arg("30")
+            .env("APPDIR", &dir)
+            .env("APPIMAGE", "/tmp/PhotoCraft-1.2-x86_64.AppImage")
+            .spawn()
+            .unwrap();
+        let mut detector = super::ProcessDetector::default();
+        let detected = detector.detect(&["PhotoCraft"]);
+        let _ = child.kill();
+        let _ = child.wait();
+        fs::remove_dir_all(dir).unwrap();
+        let detected =
+            detected.expect("AppImage payload must match even with a generic executable name");
+        assert_eq!(detected.process_id, child.id());
+        assert_eq!(detected.name, "PhotoCraft");
+    }
+    #[test]
+    fn idle_threshold_supports_disabled_unknown_and_boundary() {
+        assert!(!super::is_idle(None, 300));
+        assert!(!super::is_idle(Some(299), 300));
+        assert!(super::is_idle(Some(300), 300));
+        assert!(!super::is_idle(Some(1000), 0));
+        assert!(super::is_idle(Some(1), 1));
+    }
     use super::*;
 
     #[test]

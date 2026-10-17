@@ -43,9 +43,6 @@ const POLL: Duration = Duration::from_secs(1);
 /// A snapshot older than this is ignored (the helper command is stuck).
 const STALE: Duration = Duration::from_secs(5);
 const IDLE_UNKNOWN: u64 = u64::MAX;
-/// Wayland only tells us when idling starts and stops, so ask for the shortest
-/// threshold anyone can pick (the settings go down to one minute) and add the time since.
-const WAYLAND_IDLE_SECS: u64 = 30;
 static IDLE_MS: AtomicU64 = AtomicU64::new(IDLE_UNKNOWN);
 
 fn start() {
@@ -54,17 +51,15 @@ fn start() {
             let _ = thread::Builder::new()
                 .name("craftpulse-wayland-idle".to_string())
                 .spawn(|| {
-                    let _ = wayland::run((WAYLAND_IDLE_SECS * 1000) as u32);
+                    let _ = wayland::run(1000);
                     wayland::AVAILABLE.store(false, Ordering::Relaxed);
                 });
         }
-        // Fill the first snapshot before returning, so the first poll is not blank.
-        refresh();
         let _ = thread::Builder::new()
             .name("craftpulse-linux".to_string())
             .spawn(|| loop {
-                thread::sleep(POLL);
                 refresh();
+                thread::sleep(POLL);
             });
     });
 }
@@ -110,17 +105,52 @@ pub fn idle_seconds() -> Option<u64> {
     (ms != IDLE_UNKNOWN).then_some(ms / 1000)
 }
 
+// Bound execution and output: compositor helpers must never stall detection.
 fn run(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program)
+    run_with_timeout(program, args, Duration::from_millis(750))
+}
+
+fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    use std::io::Read;
+    const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
+    let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    let stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.take(MAX_OUTPUT + 1).read_to_end(&mut bytes);
+        let _ = sender.send(
+            result
+                .ok()
+                .filter(|_| bytes.len() <= MAX_OUTPUT as usize)
+                .map(|_| bytes),
+        );
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let bytes = receiver.recv_timeout(remaining).ok()??;
+                return String::from_utf8(bytes).ok();
+            }
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 fn env_set(name: &str) -> bool {
@@ -263,10 +293,14 @@ fn x11_windows() -> Vec<WinInfo> {
             .unwrap_or_default()
     };
     let active = line_ids("_NET_ACTIVE_WINDOW").into_iter().next();
+    let started = Instant::now();
     line_ids("_NET_CLIENT_LIST")
         .into_iter()
         .take(80)
         .filter_map(|id| {
+            if started.elapsed() >= Duration::from_secs(1) {
+                return None;
+            }
             let details = run(
                 "xprop",
                 &["-id", &id, "_NET_WM_PID", "_NET_WM_NAME", "WM_NAME"],
@@ -317,7 +351,7 @@ fn poll_idle() -> Option<u64> {
         return Some(if since == 0 {
             0
         } else {
-            WAYLAND_IDLE_SECS * 1000 + (unix_seconds() - since).max(0) as u64 * 1000
+            1000 + (unix_seconds() - since).max(0) as u64 * 1000
         });
     }
     if desktop_is("GNOME") {
@@ -523,22 +557,30 @@ pub fn variant_name_matches(name: &str, app: &str) -> bool {
 /// (including the ArtCraft launcher and the AppImages it starts):
 /// `environment.d` for future logins, and the running systemd user session for
 /// programs started from the desktop's menu straight away.
-pub fn set_session_environment(pairs: &[(String, String)]) -> bool {
+pub fn set_session_environment(pairs: &[(String, String)]) -> (bool, bool) {
     let Some(dir) = dirs::config_dir().map(|dir| dir.join("environment.d")) else {
-        return false;
+        return (false, false);
     };
     let written = write_environment_file(&dir, pairs);
-    if !pairs.is_empty() {
-        let assignments: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        let mut args = vec!["--user", "set-environment"];
-        args.extend(assignments.iter().map(String::as_str));
-        let _ = run("systemctl", &args);
-    }
-    written
+    let assignments: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let mut args = vec!["--user", "set-environment"];
+    args.extend(assignments.iter().map(String::as_str));
+    let applied = pairs.is_empty() || run("systemctl", &args).is_some();
+    (written, applied)
 }
 
 fn write_environment_file(dir: &Path, pairs: &[(String, String)]) -> bool {
-    let text: String = pairs.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+    let text: String = pairs
+        .iter()
+        .map(|(k, v)| {
+            let value = v
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('$', "\\$")
+                .replace('`', "\\`");
+            format!("{k}=\"{value}\"\n")
+        })
+        .collect();
     std::fs::create_dir_all(dir)
         .and_then(|()| std::fs::write(dir.join("50-craftpulse.conf"), text))
         .is_ok()
@@ -547,6 +589,41 @@ fn write_environment_file(dir: &Path, pairs: &[(String, String)]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_timeout_and_failure_are_bounded() {
+        let started = Instant::now();
+        assert!(
+            run_with_timeout("sh", &["-c", "exec sleep 5"], Duration::from_millis(40)).is_none()
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(run_with_timeout("sh", &["-c", "exit 1"], Duration::from_secs(1)).is_none());
+        assert_eq!(
+            run_with_timeout("sh", &["-c", "printf 'hello'"], Duration::from_secs(1)).as_deref(),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn helper_drains_output_larger_than_a_pipe() {
+        let output = run_with_timeout(
+            "sh",
+            &["-c", "head -c 100000 /dev/zero"],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(output.len(), 100000);
+    }
+
+    #[test]
+    fn helper_rejects_excessive_output() {
+        assert!(run_with_timeout(
+            "sh",
+            &["-c", "head -c 5000000 /dev/zero"],
+            Duration::from_secs(2)
+        )
+        .is_none());
+    }
 
     #[test]
     fn parses_hyprland_clients() {
@@ -640,7 +717,7 @@ mod tests {
             &[("LIGHTCRAFT_CONTROL_PORT".into(), "7980".into())]
         ));
         let text = std::fs::read_to_string(dir.join("50-craftpulse.conf")).unwrap();
-        assert_eq!(text, "LIGHTCRAFT_CONTROL_PORT=7980\n");
+        assert_eq!(text, "LIGHTCRAFT_CONTROL_PORT=\"7980\"\n");
         let _ = std::fs::remove_dir_all(dir);
     }
 

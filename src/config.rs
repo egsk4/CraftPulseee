@@ -365,7 +365,11 @@ impl Config {
             patterns.push(pattern.as_str());
         }
         set_value(&mut document["hide_patterns"], value(patterns));
-        if document["apps"].as_table().is_none() {
+        if document
+            .get("apps")
+            .and_then(toml_edit::Item::as_table)
+            .is_none()
+        {
             document["apps"] = toml_edit::Item::Table(toml_edit::Table::new());
         }
         for (name, app) in &self.apps {
@@ -468,6 +472,21 @@ large_image_key = "designcraft"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_minimal_config_preserves_idle_minutes_and_comments() {
+        let path =
+            std::env::temp_dir().join(format!("craftpulsee-minimal-{}.toml", std::process::id()));
+        fs::write(&path, "# Keep my settings\nidle_minutes = 2\n").unwrap();
+        let config: Config = de::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        config.save_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let saved: Config = de::from_str(&text).unwrap();
+        assert_eq!(saved.idle_minutes, 2);
+        assert_eq!(saved.apps.len(), 7);
+        assert!(text.contains("# Keep my settings"));
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn default_config_has_all_apps() {

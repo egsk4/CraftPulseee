@@ -211,7 +211,11 @@ fn handle_request(
                     return Response::from_string(message).with_status_code(StatusCode(400));
                 }
             };
+            if update.idle_minutes.is_some_and(|value| value > 240) {
+                return Response::from_string("Idle timeout must be between 0 and 240 minutes").with_status_code(StatusCode(400));
+            }
             let mut config = config.lock().unwrap_or_else(|e| e.into_inner());
+            let launch_changed = update.launch_at_login.is_some_and(|v| v != config.launch_at_login);
             if let Some(value) = update.quiet_hours {
                 config.quiet_hours = value;
             }
@@ -222,7 +226,7 @@ fn handle_request(
                 config.quiet_end = value;
             }
             if let Some(value) = update.idle_minutes {
-                config.idle_minutes = value.min(240);
+                config.idle_minutes = value;
             }
             if let Some(value) = update.pause_while_streaming {
                 config.pause_while_streaming = value;
@@ -295,8 +299,10 @@ fn handle_request(
                 return Response::from_string(error).with_status_code(StatusCode(500));
             }
             drop(config);
-            if let Err(error) = startup::set_enabled(launch_at_login) {
-                return Response::from_string(error).with_status_code(StatusCode(500));
+            if launch_changed {
+                if let Err(error) = startup::set_enabled(launch_at_login) {
+                    return Response::from_string(error).with_status_code(StatusCode(500));
+                }
             }
             json_response(r#"{"saved":true}"#.to_string())
         }
@@ -328,8 +334,8 @@ fn handle_request(
         (&Method::Post, "/api/live/enable") => {
             let config = config.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let names: Vec<&str> = config.apps.keys().map(String::as_str).collect();
-            let (applied, lines) = crate::control::enable_environment(&config, &names);
-            json_response(serde_json::json!({"applied": applied, "lines": lines, "platform": std::env::consts::OS}).to_string())
+            let (applied, persisted, lines) = crate::control::enable_environment(&config, &names);
+            json_response(serde_json::json!({"applied": applied, "persisted": persisted, "lines": lines, "platform": std::env::consts::OS}).to_string())
         }
         (&Method::Get, "/api/pause") => json_response(
             serde_json::json!({"paused": crate::pause::is_paused(), "until": crate::pause::until(), "auto": crate::pause::auto()}).to_string(),

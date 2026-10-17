@@ -163,26 +163,20 @@ impl Popup {
     }
 }
 
-/// Linux: a normal window with the same settings page. Wayland does not let
-/// a program place its own window, and tray icons there do not report clicks,
-/// so it opens from the tray menu and the compositor decides where it goes. It
-/// stays open until you close it, because tiling compositors move focus with the mouse.
+/// A native settings window on Linux. Wayland controls window placement,
+/// so keep normal decorations and let the compositor place it.
 #[cfg(target_os = "linux")]
 pub struct Popup {
     window: tao::window::Window,
-    // Must stay alive for as long as the window is shown.
     _webview: wry::WebView,
     visible: bool,
 }
 
 #[cfg(target_os = "linux")]
 impl Popup {
-    /// Creates the window (hidden) and loads `url`. Returns `None` if the
-    /// window or WebKitGTK couldn't be created.
     pub fn new(target: &EventLoopWindowTarget<()>, url: &str) -> Option<Self> {
         use tao::{dpi::LogicalSize, platform::unix::WindowExtUnix, window::WindowBuilder};
         use wry::WebViewBuilderExtUnix;
-
         let window = WindowBuilder::new()
             .with_title("CraftPulse")
             .with_inner_size(LogicalSize::new(420.0, 640.0))
@@ -203,24 +197,22 @@ impl Popup {
     pub fn is_visible(&self) -> bool {
         self.visible
     }
-
     pub fn show(&mut self, _anchor: Option<Rect>) {
         self.window.set_visible(true);
         self.window.set_focus();
         self.visible = true;
     }
-
-    pub fn lost_focus(&self) -> bool {
-        false
-    }
-
     pub fn hide(&mut self) {
         self.window.set_visible(false);
         self.visible = false;
     }
+    // Tiling compositors can move focus with the pointer; close explicitly.
+    pub fn lost_focus(&self) -> bool {
+        false
+    }
 }
 
-/// Other platforms keep the old behaviour: the tray opens the browser.
+/// Other platforms open the browser.
 #[cfg(not(any(windows, target_os = "linux")))]
 pub struct Popup;
 
@@ -245,25 +237,57 @@ impl Popup {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-mod manual {
+mod tests {
+    /// Requires X11/Wayland, a D-Bus session and WebKitGTK's sandbox support.
+    /// Run alone: cargo test linux_settings_window -- --ignored --test-threads=1
     #[test]
     #[ignore]
-    fn popup_opens() {
+    fn linux_settings_window_renders_preview_buttons() {
+        use std::{
+            sync::{
+                atomic::{AtomicBool, Ordering},
+                Arc, Mutex,
+            },
+            time::{Duration, Instant},
+        };
         use tao::{
             event_loop::{ControlFlow, EventLoopBuilder},
-            platform::unix::EventLoopBuilderExtUnix,
+            platform::{run_return::EventLoopExtRunReturn, unix::EventLoopBuilderExtUnix},
         };
-        let event_loop = EventLoopBuilder::new().with_any_thread(true).build();
-        let mut popup = super::Popup::new(&event_loop, "http://127.0.0.1:9/").expect("popup");
+        let config = Arc::new(Mutex::new(crate::config::Config::default()));
+        let server = crate::settings::SettingsServer::start(
+            config,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let mut event_loop = EventLoopBuilder::new().with_any_thread(true).build();
+        let mut popup =
+            super::Popup::new(&event_loop, &server.url()).expect("native settings window");
         popup.show(None);
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(8);
-        event_loop.run(move |_, _, flow| {
-            *flow = ControlFlow::WaitUntil(
-                std::time::Instant::now() + std::time::Duration::from_millis(100),
-            );
-            if std::time::Instant::now() > end {
+        let passed = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let mut next_check = Instant::now();
+        event_loop.run_return(|_, _, flow| {
+            *flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(50));
+            if passed.load(Ordering::Relaxed) || started.elapsed() > Duration::from_secs(20) {
                 *flow = ControlFlow::Exit;
+            } else if Instant::now() >= next_check {
+                next_check = Instant::now() + Duration::from_millis(300);
+                let passed = Arc::clone(&passed);
+                popup._webview.evaluate_script_with_callback(r#"(() => {
+                    if(document.getElementById('status')?.textContent !== 'Running') return false;
+                    drawPreview({app_name:'PhotoCraft',document:'Poster',state:'Editing',buttons:[['<Portfolio>','https://example.com/me'],['Unsafe','javascript:alert(1)']]});
+                    const buttons=document.querySelectorAll('#preview-buttons a');
+                    return buttons.length===1 && buttons[0].textContent==='<Portfolio>' && buttons[0].href==='https://example.com/me' && buttons[0].rel==='noopener noreferrer' && document.getElementById('idle-minutes').value==='5';
+                })()"#, move |value| { if value == "true" { passed.store(true, Ordering::Relaxed); } }).unwrap();
             }
         });
+        popup.hide();
+        assert!(
+            passed.load(Ordering::Relaxed),
+            "settings must load, authenticate and render safe link buttons in WebKit"
+        );
     }
 }
