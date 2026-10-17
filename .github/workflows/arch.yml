@@ -3,11 +3,26 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: arch-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   arch:
     runs-on: ubuntu-latest
-    container: archlinux:base
+    timeout-minutes: 20
+    container:
+      image: archlinux:base
+      # Let WebKit create its own sandbox namespaces inside the test container.
+      options: --security-opt seccomp=unconfined --security-opt apparmor=unconfined
     steps:
+      - name: Stop superseded diagnostic run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/actions/runs/39026769086/cancel > /dev/null
       - name: Install signed Arch packages
         run: pacman -Syu --noconfirm --needed git base-devel rust gtk3 webkit2gtk-4.1 libayatana-appindicator xdotool python sway dbus
       - name: Allow unprivileged headless Sway in the container
@@ -19,6 +34,7 @@ jobs:
       - name: Prepare unprivileged test user
         run: |
           useradd -m tester
+          runuser -u tester -- unshare -Ur true
           chown -R tester:tester "$GITHUB_WORKSPACE"
       - name: Build and check
         shell: bash
