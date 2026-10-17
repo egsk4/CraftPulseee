@@ -45,6 +45,13 @@ Linux, Windows and macOS. CI results must be checked separately from local resul
 - Both display tests then passed separately under headless Sway: Wayland idle
   notification and native WebKit settings page, including preview buttons.
 - Strict Clippy and debug build passed.
+- Native settings-window and simulated AppImage smoke checks also passed under
+  Xvfb/X11. The X11 smoke checks idle configuration, not elapsed idle detection.
+- End-to-end smoke passed with both a simulated AppImage payload and real
+  PhotoCraft 0.9.0: editing/idle presence, buttons over mock Discord IPC, API
+  authentication, settings persistence, and partial session-setup failure.
+  The real app was launched directly from extracted AppImage contents, not
+  installed through the launcher. Its detailed control API was not exercised.
 - Official launcher 0.3.2 x86-64 AppImage: published SHA256 matched and its real
   window opened under Sway using extracted AppImage contents (no FUSE available).
 - Rolling Arch container `20261011.0.609700` starts, but package installation is
@@ -53,3 +60,11 @@ Linux, Windows and macOS. CI results must be checked separately from local resul
 
 These checks do not establish compatibility with every desktop or ArtCraft
 release. Check the workflow run for actual Arch build results.
+
+![Real launcher and PhotoCraft on the Debian/Sway test host](docs/testing/launcher-photocraft-sway.png)
+
+The launcher is offline in this cloud environment. PhotoCraft uses CPU rendering
+because the test host has no GPU. [Captured CraftPulse diagnostics](docs/testing/photocraft-presence.json)
+show the detected app and presence. To repeat the smoke check against an already
+running real PhotoCraft, set `CRAFTPULSE_USE_RUNNING_PHOTOCRAFT=1`; otherwise it
+creates a simulated AppImage process. Both modes use a mock Discord peer.

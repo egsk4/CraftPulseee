@@ -11,7 +11,7 @@ pub struct DetectedApp {
     pub document: Option<String>,
 }
 
-/// Largest idle timeout accepted by the settings API (one day).
+/// Seconds without input; u64::MAX means this session cannot report idle time.
 pub static LAST_IDLE_SECONDS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(u64::MAX);
 

@@ -13,7 +13,14 @@ jobs:
           useradd -m tester
           chown -R tester:tester "$GITHUB_WORKSPACE"
       - name: Build and check
-        run: runuser -u tester -- bash scripts/check_arch.sh
+        shell: bash
+        run: |
+          set +e
+          runuser -u tester -- bash scripts/check_arch.sh > arch-test.log 2>&1
+          result=$?
+          tail -100 arch-test.log
+          { echo '### Arch check output'; echo '```text'; tail -100 arch-test.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$result"
       - uses: actions/upload-artifact@v4
         with:
           name: craftpulse-arch-x86_64

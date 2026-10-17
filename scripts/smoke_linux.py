@@ -107,7 +107,7 @@ def main():
                     server_errors.append(error)
         server = threading.Thread(target=serve, daemon=True)
         server.start()
-        fake_app = subprocess.Popen([str(payload), "120"], env={**env, "APPDIR": str(appdir),
+        fake_app = None if os.environ.get("CRAFTPULSE_USE_RUNNING_PHOTOCRAFT") else subprocess.Popen([str(payload), "120"], env={**env, "APPDIR": str(appdir),
             "APPIMAGE": str(root / "PhotoCraft-1.2-x86_64.AppImage")})
         with (root / "app.log").open("w") as log:
             process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
@@ -160,17 +160,18 @@ def main():
                     and card.get("buttons", [{}])[0].get("label") == "Portfolio" for card in cards), 20)
                 assert process.poll() is None
                 assert not server_errors, server_errors
-                print("PASS: AppImage payload detection, settings authentication, idle updates, button IPC, persistence and partial session-setup failure")
+                print("PASS:", "running real PhotoCraft" if fake_app is None else "simulated AppImage payload", "settings authentication,", "idle presence," if env.get("WAYLAND_DISPLAY") else "idle configuration,", "button IPC, persistence and partial session-setup failure")
             except Exception:
-                print("Observed simulated cards:", cards)
+                print("Observed cards (mock Discord peer):", cards)
                 print("Mock server errors:", server_errors)
                 print((root / "app.log").read_text())
                 raise
             finally:
                 process.terminate()
                 process.wait(timeout=10)
-                fake_app.terminate()
-                fake_app.wait(timeout=5)
+                if fake_app is not None:
+                    fake_app.terminate()
+                    fake_app.wait(timeout=5)
                 stopping.set()
                 listener.close()
                 server.join(timeout=2)

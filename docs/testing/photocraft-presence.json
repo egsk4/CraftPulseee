@@ -1,0 +1,19 @@
+{
+  "discord_rpc": "Application ID 1558510318513033329",
+  "idle_seconds": 23,
+  "last_presence": {
+    "app_name": "PhotoCraft",
+    "buttons": [
+      [
+        "Portfolio",
+        "https://example.com/me"
+      ]
+    ],
+    "document": "Working",
+    "large_image_key": "photocraft",
+    "small_image_key": "artcraft",
+    "started_at": 1792233392,
+    "state": "in PhotoCraft \u2014 Editing an image"
+  },
+  "platform": "linux"
+}
