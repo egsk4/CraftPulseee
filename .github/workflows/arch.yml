@@ -1,7 +1,6 @@
 name: Arch Linux
 on:
   push:
-    branches-ignore: [codex/arch-test-report]
   pull_request:
   workflow_dispatch:
 jobs:
@@ -11,6 +10,11 @@ jobs:
     steps:
       - name: Install signed Arch packages
         run: pacman -Syu --noconfirm --needed git base-devel rust gtk3 webkit2gtk-4.1 libayatana-appindicator xdotool python sway dbus
+      - name: Allow unprivileged headless Sway in the container
+        run: |
+          # Arch grants Sway cap_sys_nice, outside Docker's capability set.
+          # Headless testing needs no realtime priority; remove that privilege.
+          if [ -n "$(getcap /usr/bin/sway)" ]; then setcap -r /usr/bin/sway; fi
       - uses: actions/checkout@v4
       - name: Prepare unprivileged test user
         run: |

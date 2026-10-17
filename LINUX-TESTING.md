@@ -29,7 +29,9 @@ Sandboxed Discord must expose a reachable Discord IPC socket.
 Install `base-devel rust gtk3 webkit2gtk-4.1 libayatana-appindicator xdotool git`.
 Run `cargo build --release --locked`. The binary is `target/release/craftpulse`.
 The VCS PKGBUILD under `packaging/arch` follows the repository's default branch;
-it will contain these changes after they are merged.
+it will contain these changes after they are merged. To build this review branch
+now, use `CRAFTPULSE_BRANCH=codex/arch-appimage-fixes makepkg -si` from
+`packaging/arch` (run makepkg as an ordinary user).
 
 For the automated headless Wayland checks also install `python sway dbus` and
 run `bash scripts/check_arch.sh` as an ordinary user. The script checks Rust
@@ -62,6 +64,10 @@ Linux, Windows and macOS. CI results must be checked separately from local resul
 - Rolling Arch container `20261011.0.609700` starts, but package installation is
   blocked by this cloud environment's mirror network restriction. A container
   shares its host kernel and does not reproduce another machine's exact desktop.
+
+- Arch CI has passed all 184 regression tests, strict Clippy and a debug build.
+  Its initial GUI run was blocked by Sway file capabilities in Docker; the CI
+  setup removes that unneeded privilege for headless tests.
 
 These checks do not establish compatibility with every desktop or ArtCraft
 release. Check the workflow run for actual Arch build results.

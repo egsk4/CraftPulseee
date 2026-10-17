@@ -13,7 +13,7 @@ optdepends=('xorg-xprop: window titles on X11 and XWayland'
             'kdotool: window titles on KDE Plasma (Wayland)')
 provides=('craftpulse')
 conflicts=('craftpulse')
-source=("git+$url.git")
+source=("git+$url.git#branch=${CRAFTPULSE_BRANCH:-main}")
 sha256sums=('SKIP')
 
 pkgver() {
